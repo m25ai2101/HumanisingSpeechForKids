@@ -45,7 +45,9 @@ def _detect_with_model(audio_path: str) -> tuple[str, float]:
     import librosa
     pipe = _load_model()
 
-    y, sr = librosa.load(audio_path, sr=16_000, mono=True)
+    # Cap at 60 s — sufficient to characterise story emotion, avoids loading
+    # entire 15-20 min audio files which makes CPU inference extremely slow.
+    y, sr = librosa.load(audio_path, sr=16_000, mono=True, duration=60.0)
     y_trimmed, _ = librosa.effects.trim(y, top_db=25)
     if len(y_trimmed) > sr * 0.2:
         y = y_trimmed
@@ -71,7 +73,7 @@ def _extract_features(audio_path: str) -> dict:
     import librosa
     import scipy.signal
 
-    y, sr = librosa.load(audio_path, sr=16_000, mono=True)
+    y, sr = librosa.load(audio_path, sr=16_000, mono=True, duration=60.0)
 
     y_trimmed, _ = librosa.effects.trim(y, top_db=25)
     if len(y_trimmed) > sr * 0.2:

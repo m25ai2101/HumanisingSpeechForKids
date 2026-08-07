@@ -122,15 +122,13 @@ def _process_pair(
         if text_path is not None:
             text = text_path.read_text(encoding="utf-8").strip()
             # Still use Whisper for word timestamps even when text is provided
-            result = asr.transcribe_with_timestamps(str(audio_path))
-            words  = result.get("words", [])
-            # If Whisper text diverges badly, prefer the provided text
+            asr_text, words = asr.transcribe_with_timestamps(str(audio_path))
+            # If the provided text is empty, fall back to Whisper's transcript
             if not text:
-                text = result.get("text", "").strip()
+                text = asr_text
         else:
-            result = asr.transcribe_with_timestamps(str(audio_path))
-            text   = result.get("text", "").strip()
-            words  = result.get("words", [])
+            text, words = asr.transcribe_with_timestamps(str(audio_path))
+            text = text.strip()
     except Exception as e:
         print(f"[Pipeline] SKIP {audio_path.name} — ASR failed: {e}")
         return None
