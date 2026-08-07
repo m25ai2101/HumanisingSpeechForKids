@@ -1,0 +1,21 @@
+# Large data files — too big for GitHub
+raw_data/
+data/
+checkpoints/
+prosody.wav
+
+# Python environment
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Colab / Jupyter
+*.ipynb_checkpoints
+
+# Claude Code local settings
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,81 @@
+# =============================================================================
+# HumanizingSpeech — Python dependencies
+# Install: pip install -r requirements.txt
+# Python: 3.10 – 3.11 recommended (coqui-tts does not support 3.12+)
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Core audio processing
+# -----------------------------------------------------------------------------
+numpy
+scipy
+librosa
+soundfile          # audio I/O used by datasets + librosa backends
+
+# -----------------------------------------------------------------------------
+# Speech recognition (Whisper)
+# -----------------------------------------------------------------------------
+openai-whisper
+
+# -----------------------------------------------------------------------------
+# TTS playback + microphone recording
+# -----------------------------------------------------------------------------
+pyttsx3
+sounddevice
+
+# -----------------------------------------------------------------------------
+# Deep learning — PyTorch
+# Install the CPU build by default; for GPU replace with the appropriate
+# CUDA wheel from https://pytorch.org/get-started/locally/
+# e.g. pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+# -----------------------------------------------------------------------------
+torch>=2.0
+torchaudio
+
+# -----------------------------------------------------------------------------
+# HuggingFace — model hub + training utilities
+# transformers must stay on the 4.x line: coqui-tts imports isin_mps_friendly
+# which was removed in transformers 5.x.
+# -----------------------------------------------------------------------------
+transformers>=4.57,<5
+accelerate             # optional but recommended for multi-GPU / mixed precision
+
+# -----------------------------------------------------------------------------
+# Emotion detection models (downloaded automatically on first run)
+#   text  : j-hartmann/emotion-english-distilroberta-base  (~300 MB)
+#   speech: superb/wav2vec2-base-superb-er                 (~380 MB)
+#   NLI   : typeform/distilbert-base-uncased-mnli          (~268 MB)
+# All loaded via transformers.pipeline — no extra pip package needed.
+# -----------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# Prosody prediction model — BERT tokenizer + model
+#   bert-base-uncased downloaded automatically via transformers
+# -----------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# Dataset loading (LibriSpeech / LibriTTS from HuggingFace)
+# -----------------------------------------------------------------------------
+datasets>=2.14
+
+# -----------------------------------------------------------------------------
+# Storynory scraper (scrape_storynory.py)
+# -----------------------------------------------------------------------------
+requests
+beautifulsoup4
+
+# -----------------------------------------------------------------------------
+# Voice cloning — Coqui XTTS-v2 (~1.9 GB download on first run)
+# The maintained Coqui fork; original `TTS` package does not support Python
+# >= 3.12. The [codec] extra pulls torchcodec for torch >= 2.9 audio I/O.
+# -----------------------------------------------------------------------------
+coqui-tts[codec]
+
+# =============================================================================
+# SYSTEM-LEVEL requirement (NOT a pip package):
+#   FFmpeg shared libraries (DLLs) must be on PATH — required by torchcodec.
+#   Windows:  winget install --id Gyan.FFmpeg.Shared
+#             (add its bin/ directory, containing avcodec*.dll, to PATH)
+#   macOS:    brew install ffmpeg
+#   Linux:    sudo apt install ffmpeg
+# =============================================================================
