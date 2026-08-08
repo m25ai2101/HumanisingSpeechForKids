@@ -456,12 +456,53 @@ def build(
 
     print(f"[Pipeline] Found {len(pairs)} audio files in {data_dir}")
 
+    # Write records to a staging file immediately after each story so a crash
+    # doesn't lose everything. The staging file is split into train/val/test
+    # at the end.
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    staging_path = out / "staging.jsonl"
+
+    # Resume: skip files already recorded in the staging file
+    already_done: set[str] = set()
+    if staging_path.exists():
+        with open(staging_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        already_done.add(json.loads(line)["audio_path"])
+                    except Exception:
+                        pass
+        print(f"[Pipeline] Resuming — {len(already_done)} stories already in staging.jsonl")
+
+    staging_file = open(staging_path, "a", encoding="utf-8")
     records: list[dict] = []
-    for i, (audio, txt) in enumerate(pairs):
-        print(f"[Pipeline] Processing {i + 1}/{len(pairs)}: {audio.name}")
-        rec = _process_pair(audio, txt, content_type=content_type, verbose=verbose)
-        if rec is not None:
-            records.append(rec)
+
+    # Load existing staging records for the final split
+    if already_done:
+        with open(staging_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        records.append(json.loads(line))
+                    except Exception:
+                        pass
+
+    try:
+        for i, (audio, txt) in enumerate(pairs):
+            if str(audio) in already_done:
+                print(f"[Pipeline] Skipping {i + 1}/{len(pairs)}: {audio.name} (already done)")
+                continue
+            print(f"[Pipeline] Processing {i + 1}/{len(pairs)}: {audio.name}")
+            rec = _process_pair(audio, txt, content_type=content_type, verbose=verbose)
+            if rec is not None:
+                staging_file.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                staging_file.flush()
+                records.append(rec)
+    finally:
+        staging_file.close()
 
     _finish_and_write(records, output_dir, split, seed)
 

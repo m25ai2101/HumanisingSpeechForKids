@@ -131,42 +131,19 @@ def load(checkpoint_path: str | None = None, bert_model_id: str = "bert-base-unc
     _model.eval()
 
 
-def predict(
-    text: str,
-    emotion_vec: dict[str, float],
-    content_type: str = "fiction",
+def _predict_sentence(
+    sentence: str,
+    emo_tensor: torch.Tensor,
+    dominant: str,
+    confidence: float,
+    content_type: str,
 ) -> list[AnnotatedSegment]:
-    """
-    Predict per-segment prosody from text + emotion vector.
-
-    Args:
-        text:         Story sentence or paragraph.
-        emotion_vec:  Canonical emotion probability dict from fusion.fuse().
-        content_type: "fiction" or "non_fiction" (scales pitch range).
-
-    Returns:
-        List of AnnotatedSegment — the source-of-truth intermediate
-        representation consumed by tts.speak_prosody().
-    """
-    if _model is None:
-        raise RuntimeError("Call prosody_model.load() before predict().")
-
-    from fusion import dominant_label
-
-    dominant, confidence = dominant_label(emotion_vec)
-
-    # Build emotion tensor: ordered by EMOTIONS list
-    emo_tensor = torch.tensor(
-        [[emotion_vec.get(e, 0.0) for e in EMOTIONS]],
-        dtype=torch.float32,
-    ).to(_device)
-
-    # Tokenize — word-level alignment via return_offsets_mapping
+    """Run BERT prosody prediction on a single short sentence."""
     encoding = _tokenizer(
-        text,
+        sentence,
         return_tensors="pt",
         truncation=True,
-        max_length=512,
+        max_length=ProsodyDataset.MAX_LEN,   # match training sequence length
         return_offsets_mapping=True,
     )
     input_ids      = encoding["input_ids"].to(_device)
@@ -175,20 +152,62 @@ def predict(
     with torch.no_grad():
         out = _model(input_ids, attention_mask, emo_tensor)
 
-    # Extract per-token predictions (drop [CLS] and [SEP])
     pitch_shifts    = out["pitch_shift"][0, 1:-1].cpu().tolist()
     duration_ratios = out["duration_ratio"][0, 1:-1].cpu().tolist()
     volumes         = out["volume"][0, 1:-1].cpu().tolist()
     pauses          = out["pause_after"][0, 1:-1].cpu().tolist()
+    tokens          = _tokenizer.convert_ids_to_tokens(input_ids[0].cpu().tolist())[1:-1]
 
-    # Convert token-level predictions to word-level segments
-    tokens  = _tokenizer.convert_ids_to_tokens(input_ids[0].cpu().tolist())[1:-1]
-    segments = _tokens_to_segments(
+    return _tokens_to_segments(
         tokens, pitch_shifts, duration_ratios, volumes, pauses,
         dominant, confidence, content_type,
     )
 
-    return segments
+
+def predict(
+    text: str,
+    emotion_vec: dict[str, float],
+    content_type: str = "fiction",
+) -> list[AnnotatedSegment]:
+    """
+    Predict per-segment prosody from text + emotion vector.
+
+    The full text is split into sentences so each BERT call matches the
+    short-utterance length the model was trained on (MAX_LEN=128 tokens).
+
+    Args:
+        text:         Full story text (any length).
+        emotion_vec:  Canonical emotion probability dict from fusion.fuse().
+        content_type: "fiction" or "non_fiction" (scales pitch range).
+
+    Returns:
+        List of AnnotatedSegment consumed by tts.speak_prosody().
+    """
+    if _model is None:
+        raise RuntimeError("Call prosody_model.load() before predict().")
+
+    import re
+    from fusion import dominant_label
+
+    dominant, confidence = dominant_label(emotion_vec)
+
+    emo_tensor = torch.tensor(
+        [[emotion_vec.get(e, 0.0) for e in EMOTIONS]],
+        dtype=torch.float32,
+    ).to(_device)
+
+    # Split into sentences — each processed independently to match training
+    # distribution (model trained on ~20-word Whisper utterances, not full stories).
+    sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if s.strip()]
+    if not sentences:
+        sentences = [text]
+
+    all_segments: list[AnnotatedSegment] = []
+    for sentence in sentences:
+        segs = _predict_sentence(sentence, emo_tensor, dominant, confidence, content_type)
+        all_segments.extend(segs)
+
+    return all_segments
 
 
 def _tokens_to_segments(
