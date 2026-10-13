@@ -45,8 +45,11 @@ import tempfile
 import threading
 
 import numpy as np
-import sounddevice as sd
 import scipy.io.wavfile as wav
+# sounddevice (and its PortAudio system dependency) is imported lazily inside
+# record_microphone(). This lets the pipeline run on headless machines such as
+# Colab, which have no audio device / PortAudio library, as long as --mic is
+# not used.
 
 import asr
 import emotion
@@ -68,6 +71,8 @@ def record_microphone() -> str:
     Press Enter to start recording, press Enter again to stop.
     Returns the path to a temporary WAV file containing the recording.
     """
+    import sounddevice as sd
+
     input("[MIC] Press Enter to START recording...")
     print("[MIC] Recording... Press Enter to STOP.")
 
