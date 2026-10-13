@@ -27,6 +27,12 @@ def _register_ffmpeg_dll_dir() -> str | None:
     via os.add_dll_directory(). We look for it on PATH first, then fall back to
     the default winget (Gyan.FFmpeg.Shared) install location.
     """
+    # Windows-only: os.add_dll_directory does not exist on Linux/macOS, where
+    # the dynamic loader finds FFmpeg's shared libraries via the normal search
+    # path. On those platforms this is a no-op.
+    if not hasattr(os, "add_dll_directory"):
+        return None
+
     candidates = []
     ff = shutil.which("ffmpeg")
     if ff:
