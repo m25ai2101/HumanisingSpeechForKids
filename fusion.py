@@ -59,6 +59,15 @@ def fuse(
     return _normalise(fused)
 
 
+def derive_va(vec: dict[str, float]) -> tuple[float, float]:
+    """
+    Return (valence, arousal) derived from a canonical emotion probability
+    vector using the Russell circumplex anchors in emotion_schema.
+    """
+    from emotion_schema import vec_to_valence_arousal
+    return vec_to_valence_arousal(vec)
+
+
 def dominant_label(vec: dict[str, float]) -> tuple[str, float]:
     """Return (label, confidence) for the highest-scoring emotion in a vector."""
     label = max(vec, key=vec.get)

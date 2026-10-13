@@ -36,7 +36,7 @@ PITCH_MIN,    PITCH_MAX    = -6.0, 6.0
 DURATION_MIN, DURATION_MAX =  0.5, 2.5
 VOLUME_MIN,   VOLUME_MAX   =  0.4, 1.0
 PAUSE_MIN,    PAUSE_MAX    =  0.0, 2.0
-BASE_RATE                  = 150   # wpm at duration_ratio = 1.0
+BASE_RATE                  = 110   # wpm at duration_ratio = 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +137,8 @@ def _predict_sentence(
     dominant: str,
     confidence: float,
     content_type: str,
+    valence: float = 0.0,
+    arousal: float = 0.0,
 ) -> list[AnnotatedSegment]:
     """Run BERT prosody prediction on a single short sentence."""
     encoding = _tokenizer(
@@ -160,7 +162,7 @@ def _predict_sentence(
 
     return _tokens_to_segments(
         tokens, pitch_shifts, duration_ratios, volumes, pauses,
-        dominant, confidence, content_type,
+        dominant, confidence, content_type, valence, arousal,
     )
 
 
@@ -202,9 +204,12 @@ def predict(
     if not sentences:
         sentences = [text]
 
+    from emotion_schema import vec_to_valence_arousal
+    valence, arousal = vec_to_valence_arousal(emotion_vec)
+
     all_segments: list[AnnotatedSegment] = []
     for sentence in sentences:
-        segs = _predict_sentence(sentence, emo_tensor, dominant, confidence, content_type)
+        segs = _predict_sentence(sentence, emo_tensor, dominant, confidence, content_type, valence, arousal)
         all_segments.extend(segs)
 
     return all_segments
@@ -219,13 +224,15 @@ def _tokens_to_segments(
     emotion: str,
     emotion_confidence: float,
     content_type: str,
+    valence: float = 0.0,
+    arousal: float = 0.0,
 ) -> list[AnnotatedSegment]:
     """
     Merge sub-word tokens (## prefix) into whole words and average their
     prosody values, then emit one AnnotatedSegment per phrase boundary.
     A phrase boundary is a pause_after > 0.15s or end-of-sequence.
     """
-    PHRASE_GAP = 0.15
+    PHRASE_GAP = 0.20
     is_fiction = content_type == "fiction"
     pitch_scale = 1.0 if is_fiction else 0.4
 
@@ -267,7 +274,7 @@ def _tokens_to_segments(
         avg_pitch  = float(sum(w["pitch"]    for w in group) / len(group)) * pitch_scale
         avg_dur    = float(sum(w["duration"] for w in group) / len(group))
         avg_vol    = float(sum(w["volume"]   for w in group) / len(group))
-        rate       = int(max(80, min(220, BASE_RATE / max(avg_dur, 0.4))))
+        rate       = int(max(70, min(140, BASE_RATE / max(avg_dur, 0.75))))
         return AnnotatedSegment(
             text=seg_text,
             rate=rate,
@@ -277,6 +284,8 @@ def _tokens_to_segments(
             emotion=emotion,
             emotion_confidence=round(emotion_confidence, 3),
             source="model",
+            valence=round(valence, 3),
+            arousal=round(arousal, 3),
         )
 
     for w in words:

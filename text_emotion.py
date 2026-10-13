@@ -79,6 +79,18 @@ def detect(text: str) -> dict[str, float]:
         return _keyword_fallback(text)
 
 
+def detect_valence_arousal(text: str) -> tuple[float, float]:
+    """
+    Return (valence, arousal) for text by deriving from the full 8-dim
+    emotion probability vector using Russell circumplex anchors.
+
+    Values are in roughly [-1, +1]. Uses the same model as detect().
+    """
+    from emotion_schema import vec_to_valence_arousal
+    vec = detect(text)
+    return vec_to_valence_arousal(vec)
+
+
 def dominant(text: str) -> tuple[str, float]:
     """
     Convenience wrapper — returns (label, confidence) instead of full vector.

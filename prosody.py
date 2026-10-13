@@ -86,6 +86,8 @@ class AnnotatedSegment(Segment):
     emotion: str = "neutral"           # dominant canonical emotion label
     emotion_confidence: float = 0.0    # 0.0 – 1.0
     source: str = "rule_fallback"      # "model" | "rule_fallback"
+    valence: float = 0.0               # Russell circumplex valence (-1 to +1)
+    arousal: float = 0.0               # Russell circumplex arousal (-1 to +1)
 
 
 # ---------------------------------------------------------------------------

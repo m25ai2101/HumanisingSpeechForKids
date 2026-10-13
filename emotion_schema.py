@@ -62,6 +62,35 @@ PROSODY_DEFAULTS: dict[str, dict] = {
 }
 
 
+# -------------------------------------------------------------------------
+# Russell circumplex model coordinates for each canonical emotion.
+# valence: -1 (very negative) → +1 (very positive)
+# arousal: -1 (very calm/low-energy) → +1 (very excited/high-energy)
+# -------------------------------------------------------------------------
+VALENCE_AROUSAL: dict[str, tuple[float, float]] = {
+    "excited":   ( 0.7,  0.9),
+    "joyful":    ( 0.8,  0.5),
+    "surprised": ( 0.2,  0.8),
+    "scared":    (-0.6,  0.7),
+    "dramatic":  (-0.3,  0.5),
+    "sad":       (-0.7, -0.5),
+    "calm":      ( 0.3, -0.4),
+    "neutral":   ( 0.0,  0.0),
+}
+
+
+def vec_to_valence_arousal(vec: dict[str, float]) -> tuple[float, float]:
+    """
+    Derive continuous (valence, arousal) from an 8-dim emotion probability
+    vector using a weighted average over the Russell circumplex anchors.
+
+    Returns values in roughly [-1, +1] for each dimension.
+    """
+    valence = sum(vec.get(e, 0.0) * VALENCE_AROUSAL[e][0] for e in EMOTIONS)
+    arousal = sum(vec.get(e, 0.0) * VALENCE_AROUSAL[e][1] for e in EMOTIONS)
+    return valence, arousal
+
+
 def map_to_canonical(label: str, source: str = "heuristic") -> str:
     """
     Map any source-specific emotion label to the canonical schema.

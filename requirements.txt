@@ -44,9 +44,15 @@ accelerate             # optional but recommended for multi-GPU / mixed precisio
 # Emotion detection models (downloaded automatically on first run)
 #   text  : j-hartmann/emotion-english-distilroberta-base  (~300 MB)
 #   speech: superb/wav2vec2-base-superb-er                 (~380 MB)
-#   NLI   : typeform/distilbert-base-uncased-mnli          (~268 MB)
 # All loaded via transformers.pipeline — no extra pip package needed.
 # -----------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# Fiction vs Non-Fiction gate — POS-ratio classifier (fiction.py)
+# Uses NLTK's averaged perceptron tagger; downloads ~10 MB of tagger +
+# tokenizer data on first run.
+# -----------------------------------------------------------------------------
+nltk
 
 # -----------------------------------------------------------------------------
 # Prosody prediction model — BERT tokenizer + model
