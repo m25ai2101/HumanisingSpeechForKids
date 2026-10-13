@@ -102,6 +102,8 @@ def run_pipeline(
     checkpoint_path: str = "checkpoints/best.pt",
     input_text: str | None = None,
     cleanup_audio: bool = False,
+    compare: bool = False,
+    clone_ref: str | None = None,
 ) -> str:
     """Run ASR → Emotion → Humanize → TTS on `audio_path`, or text → TTS."""
     try:
@@ -133,18 +135,100 @@ def run_pipeline(
                 speech_vec = emotion.detect_vector(audio_path)
                 fused_vec  = fusion.fuse(text_vec, speech_vec)
 
-            # Fiction gate — non-fiction gets no audio output.
+            # Fiction gate — require ≥70% confidence to block as non-fiction.
+            # Below that threshold the model is uncertain; default to fiction
+            # so borderline cases (e.g. stories with narrator intros) proceed.
             content_type, confidence = fiction.detect(text)
-            if content_type == "non_fiction":
+            if content_type == "non_fiction" and confidence >= 0.70:
                 print(
                     f"[Pipeline] Non-fiction detected (confidence: {confidence:.0%}) "
                     "— skipping audio output."
                 )
                 return text
 
-            print(f"[Pipeline] Fiction confirmed (confidence: {confidence:.0%}) — generating expressive audio.")
-            segments = prosody_model.predict(text, fused_vec, content_type=content_type)
-            tts.speak_prosody(segments, save_path=save_path, voice_index=voice_index)
+            if content_type == "non_fiction":
+                print(f"[Pipeline] Borderline ({confidence:.0%}) — treating as fiction and proceeding.")
+            else:
+                print(f"[Pipeline] Fiction confirmed (confidence: {confidence:.0%}) — generating expressive audio.")
+
+            # Paragraph-level emotion: detect emotion for each paragraph
+            # independently so the spider/scary section gets "scared",
+            # the birthday party gets "joyful", etc. — far more expressive
+            # than a single emotion label for the whole story.
+            import re as _re
+            paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+            if len(paragraphs) < 2:
+                # Fall back: single-newline separated or continuous prose
+                lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+                if len(lines) >= 2:
+                    buf, paragraphs = [], []
+                    for ln in lines:
+                        buf.append(ln)
+                        if ln[-1] in ".!?" or len(" ".join(buf)) > 300:
+                            paragraphs.append(" ".join(buf)); buf = []
+                    if buf: paragraphs.append(" ".join(buf))
+                if len(paragraphs) < 2:
+                    sents = [s.strip() for s in _re.split(r"(?<=[.!?])\s+", text) if s.strip()]
+                    paragraphs = [" ".join(sents[i:i+4]) for i in range(0, len(sents), 4)]
+                    paragraphs = [p for p in paragraphs if p]
+            if len(paragraphs) < 2:
+                # Short text or no paragraph breaks — use single emotion
+                segments = prosody_model.predict(text, fused_vec, content_type=content_type)
+            else:
+                print(f"[Pipeline] Detecting emotion per paragraph ({len(paragraphs)} paragraphs)...")
+                segments = []
+                for para in paragraphs:
+                    para_vec   = text_emotion.detect(para)
+                    fused_para = fusion.fuse(para_vec, speech_vec=None)
+                    para_segs  = prosody_model.predict(para, fused_para, content_type=content_type)
+                    segments.extend(para_segs)
+
+            if compare:
+                # Generate both standard and V-A enhanced outputs for comparison.
+                base     = save_path or "output_standard.wav"
+                va_path  = base.replace(".wav", "_va.wav") if base.endswith(".wav") else base + "_va.wav"
+                std_path = base.replace(".wav", "_standard.wav") if base.endswith(".wav") else base + "_standard.wav"
+
+                print("\n[Pipeline] Generating STANDARD (label-based) audio...")
+                tts.speak_prosody_edge(segments, save_path=std_path, play=False, use_va=False)
+
+                print("[Pipeline] Generating V-A ENHANCED audio...")
+                tts.speak_prosody_edge(segments, save_path=va_path, play=True, use_va=True)
+
+                # Print per-paragraph prosody diff table
+                _LEG_RATE  = {"scared": 18, "fearful": 18, "sad": 15, "dramatic": 12, "joyful": -8,   "surprised": -5}
+                _LEG_PITCH = {"scared": 30, "fearful": 30, "sad": 22, "dramatic": 18, "joyful": -20, "surprised": -28}
+                print("\n" + "─" * 88)
+                print(f"{'Paragraph':<30} {'Emotion':>10} {'Conf':>5}  "
+                      f"{'Std rate':>9} {'Std pitch':>10}  {'VA rate':>8} {'VA pitch':>9}")
+                print("─" * 88)
+                for para in paragraphs:
+                    pvec   = text_emotion.detect(para)
+                    dom    = max(pvec, key=pvec.get)
+                    conf_v = pvec[dom]
+                    v, a   = fusion.derive_va(pvec)
+                    leg_r  = int(conf_v * _LEG_RATE.get(dom, 0)) * (-1 if dom in ("scared","fearful","sad","dramatic") else 1)
+                    leg_p  = int(conf_v * _LEG_PITCH.get(dom, 0)) * (-1 if dom in ("scared","fearful","sad","dramatic") else 1)
+                    va_r   = max(-48, min(22, int(v * abs(a) * conf_v * 45)))
+                    va_p   = max(-60, min(60, int(v * conf_v * 100)))
+                    preview = para[:28].replace("\n", " ") + ("…" if len(para) > 28 else "")
+                    print(f"{preview:<30} {dom:>10} {conf_v:>4.0%}  "
+                          f"{leg_r:>+8}%  {leg_p:>+8}Hz  {va_r:>+7}%  {va_p:>+7}Hz")
+                print("─" * 88)
+                print(f"[Pipeline] Standard saved → {std_path}")
+                print(f"[Pipeline] V-A enhanced  → {va_path}")
+            elif clone_ref:
+                # Voice-cloned expressive output: run the prosody segments
+                # through XTTS-v2 in the reference speaker's voice.
+                tts.speak_prosody_cloned(
+                    segments,
+                    reference_wav=clone_ref,
+                    language=language or "en",
+                    save_path=save_path,
+                    use_va=True,
+                )
+            else:
+                tts.speak_prosody_edge(segments, save_path=save_path, use_va=True)
             return text
 
         # ------------------------------------------------------------------
@@ -305,6 +389,17 @@ def main() -> None:
         "--checkpoint", default="checkpoints/best.pt",
         metavar="PATH", help="Trained ProsodyPredictor checkpoint (default: checkpoints/best.pt).",
     )
+    parser.add_argument(
+        "--clone-ref", dest="clone_ref", metavar="PATH", default=None,
+        help="Path to a clean WAV of YOUR voice (~6-30 s). With --model-prosody, "
+             "renders the expressive output in this cloned voice via XTTS-v2 "
+             "instead of the fixed Edge neural voice. GPU strongly recommended.",
+    )
+    parser.add_argument(
+        "--compare", action="store_true",
+        help="Generate both standard (label-based) and V-A enhanced audio and print a diff table. "
+             "Requires --model-prosody. Saves *_standard.wav and *_va.wav.",
+    )
 
     args = parser.parse_args()
 
@@ -346,6 +441,8 @@ def main() -> None:
         checkpoint_path=args.checkpoint,
         input_text=input_text,
         cleanup_audio=cleanup,
+        compare=args.compare,
+        clone_ref=args.clone_ref,
     )
 
 
