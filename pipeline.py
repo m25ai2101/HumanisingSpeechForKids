@@ -109,6 +109,7 @@ def run_pipeline(
     cleanup_audio: bool = False,
     compare: bool = False,
     clone_ref: str | None = None,
+    skip_fiction_gate: bool = False,
 ) -> str:
     """Run ASR → Emotion → Humanize → TTS on `audio_path`, or text → TTS."""
     try:
@@ -143,15 +144,20 @@ def run_pipeline(
             # Fiction gate — require ≥70% confidence to block as non-fiction.
             # Below that threshold the model is uncertain; default to fiction
             # so borderline cases (e.g. stories with narrator intros) proceed.
+            # --no-fiction-gate bypasses this entirely (the POS-ratio classifier
+            # is imperfect and misfires on some clearly-fictional text).
             content_type, confidence = fiction.detect(text)
-            if content_type == "non_fiction" and confidence >= 0.70:
+            if skip_fiction_gate:
+                print(f"[Pipeline] Fiction gate bypassed (classifier said "
+                      f"{content_type} at {confidence:.0%}) — generating audio anyway.")
+                content_type = "fiction"
+            elif content_type == "non_fiction" and confidence >= 0.70:
                 print(
                     f"[Pipeline] Non-fiction detected (confidence: {confidence:.0%}) "
-                    "— skipping audio output."
+                    "— skipping audio output. Pass --no-fiction-gate to force audio."
                 )
                 return text
-
-            if content_type == "non_fiction":
+            elif content_type == "non_fiction":
                 print(f"[Pipeline] Borderline ({confidence:.0%}) — treating as fiction and proceeding.")
             else:
                 print(f"[Pipeline] Fiction confirmed (confidence: {confidence:.0%}) — generating expressive audio.")
@@ -401,6 +407,11 @@ def main() -> None:
              "instead of the fixed Edge neural voice. GPU strongly recommended.",
     )
     parser.add_argument(
+        "--no-fiction-gate", dest="skip_fiction_gate", action="store_true",
+        help="Skip the fiction/non-fiction classifier and always generate audio. "
+             "Use when the gate wrongly blocks clearly-fictional text.",
+    )
+    parser.add_argument(
         "--compare", action="store_true",
         help="Generate both standard (label-based) and V-A enhanced audio and print a diff table. "
              "Requires --model-prosody. Saves *_standard.wav and *_va.wav.",
@@ -448,6 +459,7 @@ def main() -> None:
         cleanup_audio=cleanup,
         compare=args.compare,
         clone_ref=args.clone_ref,
+        skip_fiction_gate=args.skip_fiction_gate,
     )
 
 
