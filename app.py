@@ -144,11 +144,29 @@ def _detect_paragraph_emotions(paragraphs: list[str]) -> list[dict]:
     return [te.detect(p) for p in paragraphs]
 
 
+# Curated voices suitable for children's story narration, grouped by gender.
+VOICE_OPTIONS = {
+    "🇬🇧 Sonia — British Female (default)": "en-GB-SoniaNeural",
+    "🇬🇧 Ryan — British Male":              "en-GB-RyanNeural",
+    "🇬🇧 Thomas — British Male (warm)":     "en-GB-ThomasNeural",
+    "🇬🇧 Libby — British Female (bright)":  "en-GB-LibbyNeural",
+    "🇺🇸 Emma — American Female":           "en-US-EmmaNeural",
+    "🇺🇸 Brian — American Male":            "en-US-BrianNeural",
+    "🇺🇸 Aria — American Female (expressive)": "en-US-AriaNeural",
+    "🇺🇸 Guy — American Male (deep)":       "en-US-GuyNeural",
+    "🇦🇺 Natasha — Australian Female":      "en-AU-NatashaNeural",
+    "🇦🇺 William — Australian Male":        "en-AU-WilliamMultilingualNeural",
+    "🇮🇪 Emily — Irish Female":             "en-IE-EmilyNeural",
+    "🇮🇪 Connor — Irish Male":              "en-IE-ConnorNeural",
+}
+
+
 def _generate_audio(
     paragraphs: list[str],
     para_vecs: list[dict],
     content_type: str,
     use_va: bool = True,
+    voice: str = "en-GB-SoniaNeural",
 ) -> bytes:
     """
     Run prosody prediction + Edge Neural TTS for every paragraph.
@@ -170,8 +188,29 @@ def _generate_audio(
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
         out_path = f.name
 
-    tts.speak_prosody_edge(all_segments, save_path=out_path, play=False, use_va=use_va)
+    tts.speak_prosody_edge(all_segments, save_path=out_path, play=False,
+                           use_va=use_va, voice=voice)
 
+    with open(out_path, "rb") as fh:
+        wav_bytes = fh.read()
+    os.remove(out_path)
+    return wav_bytes
+
+
+def _generate_basic_tts(text: str) -> bytes:
+    """
+    Plain, robotic baseline — the "basic TTS" reference for comparison.
+
+    Deliberately bypasses the whole emotion/prosody pipeline: the raw story text
+    is synthesised in one pass by the offline pyttsx3 engine at a fixed rate and
+    volume (no emotion detection, no per-paragraph prosody, no neural voice).
+    Does not touch the expressive pipeline in any way.
+    """
+    import tts
+
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+        out_path = f.name
+    tts.save(text, out_path, rate=175, volume=1.0, voice_index=0)
     with open(out_path, "rb") as fh:
         wav_bytes = fh.read()
     os.remove(out_path)
@@ -247,7 +286,7 @@ st.divider()
 col_left, col_right = st.columns([1, 2])
 
 with col_left:
-    st.subheader("Fiction Gate")
+    st.subheader("Genre Classifier")
     fc = _get_fiction()
     content_type, confidence, explanation = fc.explain(text)
 
@@ -255,8 +294,8 @@ with col_left:
         st.success(f"**Fiction** — {confidence:.0%} confident")
         fiction_emoji = "📖"
     elif confidence >= 0.70:
-        st.error(f"**Non-fiction** — {confidence:.0%} confident. Audio skipped.")
-        # Show why before we bail
+        st.error(f"**Non-fiction** — {confidence:.0%} confident. Audio skipped by default.")
+        # Show why before we (optionally) bail
         st.markdown("**Why this verdict:**")
         st.markdown(explanation.get("summary", ""))
         for r in explanation.get("reasons", [])[:4]:
@@ -266,7 +305,18 @@ with col_left:
                 f"  <small><i>{r['cite']}</i></small>",
                 unsafe_allow_html=True,
             )
-        st.stop()
+        # Override: let the user force narration of non-fiction (test case).
+        force = st.checkbox(
+            "⚠️ Narrate anyway (test non-fiction)",
+            value=False,
+            help="Bypass the fiction gate and generate expressive audio even though "
+                 "the text was classified as non-fiction. Useful as a test case to "
+                 "hear how the pipeline handles factual text.",
+        )
+        if not force:
+            st.stop()
+        st.info("Genre classifier bypassed — narrating non-fiction as a test case.")
+        content_type = "fiction"
     else:
         st.warning(f"Borderline ({confidence:.0%}) — treating as fiction.")
         content_type = "fiction"
@@ -383,144 +433,57 @@ st.divider()
 # ── Sidebar: Compare mode toggle ──────────────────────────────────────────────
 with st.sidebar:
     st.header("Options")
-    compare_mode = st.toggle(
-        "Compare Mode",
-        value=False,
-        help="Generate both Standard (label-based) and V-A Enhanced audio side-by-side "
-             "so you can hear the difference. Doubles generation time.",
+
+    # Voice selector
+    st.markdown("**Narrator Voice**")
+    selected_voice_label = st.selectbox(
+        "Voice",
+        options=list(VOICE_OPTIONS.keys()),
+        index=0,
+        label_visibility="collapsed",
     )
+    selected_voice = VOICE_OPTIONS[selected_voice_label]
+
+    # Show gender tag
+    gender_tag = "♀ Female" if "Female" in selected_voice_label else "♂ Male"
+    st.caption(f"{gender_tag} · `{selected_voice}`")
 
 # ── Audio generation ──────────────────────────────────────────────────────────
 st.subheader("Generate Expressive Audio")
 
-if compare_mode:
-    st.markdown(
-        "**Compare Mode** — generates two versions of the audio:\n\n"
-        "- **Standard**: discrete label-based prosody (fixed rate/pitch per emotion class)\n"
-        "- **V-A Enhanced**: continuous Valence–Arousal formula (magnitude scales with "
-        "emotional intensity and confidence; blended emotions interpolate smoothly)"
-    )
-    if st.button("🎵 Generate Both Audio Versions", type="primary", use_container_width=True):
-        col_std, col_va = st.columns(2)
-        with col_std:
-            with st.spinner("Generating Standard audio…"):
-                wav_std = _generate_audio(paragraphs, para_vecs, content_type, use_va=False)
-            st.session_state["wav_std"] = wav_std
-        with col_va:
-            with st.spinner("Generating V-A Enhanced audio…"):
-                wav_va = _generate_audio(paragraphs, para_vecs, content_type, use_va=True)
-            st.session_state["wav_va"] = wav_va
-        st.success("Both versions ready — listen and compare!")
+st.markdown(
+    "Generate the narration and compare Basic TTS against the full pipeline."
+)
+if st.button("🎵 Generate Audio", type="primary", use_container_width=True):
+    with st.spinner("Generating 🤖 Basic TTS (no emotion)…"):
+        st.session_state["wav_basic"] = _generate_basic_tts(text)
+    with st.spinner("Generating 🎭 My Pipeline audio… (30–90 s depending on story length)"):
+        st.session_state["wav_std"] = _generate_audio(
+            paragraphs, para_vecs, content_type, use_va=False, voice=selected_voice)
+    st.success("Both versions ready — listen and compare!")
 
-    if "wav_std" in st.session_state and "wav_va" in st.session_state:
-        col_l, col_r = st.columns(2)
-        with col_l:
-            st.markdown("#### Standard (label-based)")
-            st.audio(st.session_state["wav_std"], format="audio/wav")
-            st.download_button(
-                "⬇️ Download Standard",
-                data=st.session_state["wav_std"],
-                file_name=f"{uploaded.name.replace('.txt','')}_standard.wav",
-                mime="audio/wav",
-                use_container_width=True,
-            )
-        with col_r:
-            st.markdown("#### V-A Enhanced")
-            st.audio(st.session_state["wav_va"], format="audio/wav")
-            st.download_button(
-                "⬇️ Download V-A Enhanced",
-                data=st.session_state["wav_va"],
-                file_name=f"{uploaded.name.replace('.txt','')}_va.wav",
-                mime="audio/wav",
-                use_container_width=True,
-            )
-
-        # ── Prosody diff table ─────────────────────────────────────────────
-        st.markdown("---")
-        st.subheader("Prosody Diff — paragraph by paragraph")
-        st.caption(
-            "Shows the rate (%) and pitch (Hz) adjustments each system applies on top of "
-            "the BERT prosody model's baseline per paragraph. "
-            "V-A scales with emotional intensity (valence × arousal × confidence) — "
-            "high-confidence peaks get amplified; low-confidence blends stay near neutral."
-        )
-        diff_rows = _prosody_diff_table(paragraphs, para_vecs)
-
-        hdr = st.columns([4, 1.5, 1, 1.2, 1.2, 1.2, 1.2])
-        for col, label in zip(hdr, ["Paragraph", "Emotion", "Conf",
-                                     "Std rate", "Std pitch", "VA rate", "VA pitch"]):
-            col.markdown(f"**{label}**")
-
-        for row in diff_rows:
-            c1, c2, c3, c4, c5, c6, c7 = st.columns([4, 1.5, 1, 1.2, 1.2, 1.2, 1.2])
-            c1.markdown(f"<small>{row['preview']}</small>", unsafe_allow_html=True)
-            c2.markdown(_badge(row["emotion"], row["conf"]), unsafe_allow_html=True)
-            c3.markdown(f"**{row['conf']:.0%}**")
-            c4.markdown(f"`{row['std_rate']:+d}%`")
-            c5.markdown(f"`{row['std_pitch']:+d}Hz`")
-            c6.markdown(f"`{row['va_rate']:+d}%`")
-            c7.markdown(f"`{row['va_pitch']:+d}Hz`")
-
-        # ── Circumplex scatter plot ────────────────────────────────────────
-        st.markdown("---")
-        st.subheader("Valence–Arousal Map")
-        st.caption(
-            "Each dot is one paragraph. Position shows where it falls in emotional "
-            "space. V-A Enhanced delivery is directly proportional to this position — "
-            "dots further from centre get more expressive treatment."
-        )
-        try:
-            import matplotlib.pyplot as plt
-            import matplotlib.patches as mpatches
-
-            fig, ax = plt.subplots(figsize=(6, 5))
-            ax.axhline(0, color="#D1D5DB", linewidth=0.8)
-            ax.axvline(0, color="#D1D5DB", linewidth=0.8)
-            ax.set_xlabel("Valence  (negative ← → positive)", fontsize=10)
-            ax.set_ylabel("Arousal  (calm ← → excited)", fontsize=10)
-            ax.set_title("Paragraph positions in V-A space", fontsize=11)
-            ax.set_xlim(-1.1, 1.1)
-            ax.set_ylim(-1.1, 1.1)
-
-            _CMAP = {
-                "joyful": "#F59E0B", "excited": "#10B981", "surprised": "#6366F1",
-                "scared": "#1D4ED8", "dramatic": "#7C3AED", "sad": "#0369A1",
-                "calm": "#059669", "neutral": "#9CA3AF",
-            }
-            for i, row in enumerate(diff_rows):
-                color = _CMAP.get(row["emotion"], "#9CA3AF")
-                ax.scatter(row["valence"], row["arousal"], color=color, s=90, alpha=0.85, zorder=3)
-                ax.annotate(f"¶{i+1}", (row["valence"], row["arousal"]),
-                            textcoords="offset points", xytext=(5, 3), fontsize=7, color="#374151")
-
-            patches = [mpatches.Patch(color=c, label=e) for e, c in _CMAP.items()
-                       if any(r["emotion"] == e for r in diff_rows)]
-            ax.legend(handles=patches, fontsize=7, loc="lower right")
-            fig.tight_layout()
-            st.pyplot(fig)
-            plt.close(fig)
-        except Exception as _plot_err:
-            st.info(f"Scatter plot unavailable: {_plot_err}")
-
-else:
-    st.markdown(
-        "Runs the trained **BERT prosody model** on each paragraph using its detected emotion, "
-        "then synthesises with **Microsoft Edge Neural TTS** (en-GB-SoniaNeural) using the "
-        "**V-A Enhanced** formula — rate and pitch scale continuously with emotional intensity. "
-        "Enable **Compare Mode** in the sidebar to hear the difference vs the standard approach."
-    )
-    if st.button("🎵 Generate Audio", type="primary", use_container_width=True):
-        with st.spinner("Generating expressive audio… (30–90 seconds depending on story length)"):
-            wav_bytes = _generate_audio(paragraphs, para_vecs, content_type, use_va=True)
-        st.session_state["wav_bytes"] = wav_bytes
-        st.success("Audio ready!")
-
-    if "wav_bytes" in st.session_state:
-        st.audio(st.session_state["wav_bytes"], format="audio/wav")
+if all(k in st.session_state for k in ("wav_basic", "wav_std")):
+    _base = uploaded.name.replace(".txt", "")
+    col_basic, col_pipe = st.columns(2)
+    with col_basic:
+        st.markdown("#### 🤖 Basic TTS")
+        st.caption("No emotion / prosody")
+        st.audio(st.session_state["wav_basic"], format="audio/wav")
         st.download_button(
-            label="⬇️ Download WAV",
-            data=st.session_state["wav_bytes"],
-            file_name=f"{uploaded.name.replace('.txt', '')}_humanized.wav",
+            "⬇️ Download Basic",
+            data=st.session_state["wav_basic"],
+            file_name=f"{_base}_basic.wav",
+            mime="audio/wav",
+            use_container_width=True,
+        )
+    with col_pipe:
+        st.markdown("#### 🎭 My Pipeline")
+        st.caption("Emotion-driven prosody")
+        st.audio(st.session_state["wav_std"], format="audio/wav")
+        st.download_button(
+            "⬇️ Download My Pipeline",
+            data=st.session_state["wav_std"],
+            file_name=f"{_base}_pipeline.wav",
             mime="audio/wav",
             use_container_width=True,
         )

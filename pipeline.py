@@ -108,7 +108,6 @@ def run_pipeline(
     input_text: str | None = None,
     cleanup_audio: bool = False,
     compare: bool = False,
-    clone_ref: str | None = None,
     skip_fiction_gate: bool = False,
 ) -> str:
     """Run ASR → Emotion → Humanize → TTS on `audio_path`, or text → TTS."""
@@ -228,16 +227,6 @@ def run_pipeline(
                 print("─" * 88)
                 print(f"[Pipeline] Standard saved → {std_path}")
                 print(f"[Pipeline] V-A enhanced  → {va_path}")
-            elif clone_ref:
-                # Voice-cloned expressive output: run the prosody segments
-                # through XTTS-v2 in the reference speaker's voice.
-                tts.speak_prosody_cloned(
-                    segments,
-                    reference_wav=clone_ref,
-                    language=language or "en",
-                    save_path=save_path,
-                    use_va=True,
-                )
             else:
                 tts.speak_prosody_edge(segments, save_path=save_path, use_va=True)
             return text
@@ -401,12 +390,6 @@ def main() -> None:
         metavar="PATH", help="Trained ProsodyPredictor checkpoint (default: checkpoints/best.pt).",
     )
     parser.add_argument(
-        "--clone-ref", dest="clone_ref", metavar="PATH", default=None,
-        help="Path to a clean WAV of YOUR voice (~6-30 s). With --model-prosody, "
-             "renders the expressive output in this cloned voice via XTTS-v2 "
-             "instead of the fixed Edge neural voice. GPU strongly recommended.",
-    )
-    parser.add_argument(
         "--no-fiction-gate", dest="skip_fiction_gate", action="store_true",
         help="Skip the fiction/non-fiction classifier and always generate audio. "
              "Use when the gate wrongly blocks clearly-fictional text.",
@@ -458,7 +441,6 @@ def main() -> None:
         input_text=input_text,
         cleanup_audio=cleanup,
         compare=args.compare,
-        clone_ref=args.clone_ref,
         skip_fiction_gate=args.skip_fiction_gate,
     )
 

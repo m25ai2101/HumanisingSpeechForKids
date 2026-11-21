@@ -323,10 +323,15 @@ def speak_prosody_edge(
         rate_pct = max(-48, min(22, rate_pct))
         rate_str = f"+{rate_pct}%" if rate_pct >= 0 else f"{rate_pct}%"
 
-        # Base pitch from prosody-model semitone prediction
-        pitch_hz = int(float(seg.pitch) * HZ_PER_SEMITONE) + pitch_d
-        pitch_hz = max(-60, min(60, pitch_hz))
-        pitch_str = f"+{pitch_hz}Hz" if pitch_hz >= 0 else f"{pitch_hz}Hz"
+        # Base pitch from prosody-model semitone prediction.
+        # Cap BERT's contribution and the emotion overlay independently before
+        # summing — when both are negative (e.g. scared) they would otherwise
+        # stack to an extreme that pushes female neural voices into a distorted,
+        # muffled register that sounds like a different (male) voice.
+        bert_pitch = max(-12, min(12, int(float(seg.pitch) * HZ_PER_SEMITONE)))
+        emo_pitch  = max(-12, min(12, pitch_d))
+        pitch_hz   = max(-20, min(20, bert_pitch + emo_pitch))
+        pitch_str  = f"+{pitch_hz}Hz" if pitch_hz >= 0 else f"{pitch_hz}Hz"
 
         synth_items.append((idx, seg, rate_str, pitch_str))
 
@@ -338,26 +343,57 @@ def speak_prosody_edge(
             t.close()
             tmp_by_idx[idx] = t.name
 
+    # Synthesise in small batches — firing all segments at once causes Edge TTS
+    # to throttle or return partial audio, producing "words mixed" artifacts.
+    _BATCH = 4
+
     async def _synth_all() -> None:
-        tasks = [
-            edge_tts.Communicate(
-                seg.text.strip(), voice, rate=rate_str, pitch=pitch_str
-            ).save(tmp_by_idx[idx])
+        items = [
+            (idx, seg, rate_str, pitch_str)
             for idx, seg, rate_str, pitch_str in synth_items
             if rate_str is not None
         ]
-        await asyncio.gather(*tasks)
+        for i in range(0, len(items), _BATCH):
+            batch = items[i : i + _BATCH]
+            await asyncio.gather(*[
+                edge_tts.Communicate(
+                    seg.text.strip(), voice, rate=rate_str, pitch=pitch_str
+                ).save(tmp_by_idx[idx])
+                for idx, seg, rate_str, pitch_str in batch
+            ])
+
+    def _run_async() -> None:
+        """
+        Run _synth_all() safely whether or not an event loop is already running.
+        Streamlit has its own loop; asyncio.run() raises RuntimeError there and
+        silently falls back to pyttsx3 (warbly, emotionless audio). This detects
+        that case and uses nest_asyncio to patch the running loop instead.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            try:
+                import nest_asyncio
+                nest_asyncio.apply()
+            except ImportError:
+                pass
+            loop.run_until_complete(_synth_all())
+        else:
+            asyncio.run(_synth_all())
 
     n_text = sum(1 for _, _, r, _ in synth_items if r is not None)
     print(f"[TTS] Synthesising {n_text} segments with Edge Neural TTS ({voice})...")
     try:
-        asyncio.run(_synth_all())
+        _run_async()
     except Exception as e:
         print(f"[TTS] Edge-TTS failed ({e}) — falling back to pyttsx3.")
         for p in tmp_by_idx.values():
             if os.path.isfile(p):
                 os.remove(p)
-        return speak_prosody(segments, save_path=save_path)
+        return speak_prosody(segments, save_path=save_path, play=play)
 
     # Assemble with emotion-aware pauses
     pieces: list[np.ndarray] = []
@@ -643,6 +679,7 @@ def speak_prosody(
     save_path: str | None = None,
     voice_index: int = 1,
     target_sr: int = 22_050,
+    play: bool = True,
 ) -> str:
     """
     Render a list of prosody `Segment`s (from prosody.analyze) to expressive
@@ -734,8 +771,9 @@ def speak_prosody(
         wav_io.write(save_path, target_sr, pcm)
         print(f"[Prosody] Saved speech to: {save_path}")
 
-    print("[Prosody] Playing prosody-controlled speech...")
-    sd.play(pcm, target_sr)
-    sd.wait()
-    print("[Prosody] Playback complete.")
+    if play:
+        print("[Prosody] Playing prosody-controlled speech...")
+        sd.play(pcm, target_sr)
+        sd.wait()
+        print("[Prosody] Playback complete.")
     return save_path or ""
